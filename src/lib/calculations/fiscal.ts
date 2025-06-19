@@ -44,7 +44,9 @@ export function calculateTax(
             return calculateReelFoncier(annualRent, annualExpenses, tmi, socialTaxRate);
 
         case 'micro-BIC':
-            return calculateMicroBIC(annualRent, tmi, socialTaxRate);
+            // Déterminer l'abattement selon le type (meublé classé = 71%, autres = 50%)
+            const abatementRate = 50; // Par défaut, sera amélioré avec les données de contexte
+            return calculateMicroBIC(annualRent, tmi, socialTaxRate, abatementRate);
 
         case 'réel-BIC':
         case 'LMNP-réel':
@@ -55,7 +57,8 @@ export function calculateTax(
                 tmi,
                 socialTaxRate,
                 amortization,
-                carryForwardAmortization
+                carryForwardAmortization,
+                true // isLMP = true pour appliquer les cotisations sociales TNS
             );
 
         case 'Pinel':
@@ -153,7 +156,8 @@ function calculateReelBIC(
     tmi: number,
     socialTaxRate: number,
     newAmortization: number,
-    carryForwardAmortization: number
+    carryForwardAmortization: number,
+    isLMP: boolean = false // Distinction LMP vs LMNP pour cotisations sociales
 ) {
     const resultBeforeAmortization = annualRent - annualExpenses;
 
@@ -176,7 +180,16 @@ function calculateReelBIC(
 
     const taxableIncome = Math.max(0, resultBeforeAmortization - amortizationUsed);
     const incomeTax = taxableIncome * (tmi / 100);
-    const socialTax = taxableIncome * (socialTaxRate / 100);
+
+    // Application des cotisations sociales appropriées selon le statut
+    let socialTax: number;
+    if (isLMP && taxableIncome > 23000) {
+        // LMP avec revenus > 23k€ : cotisations sociales TNS (~35-40%)
+        socialTax = taxableIncome * 0.35;
+    } else {
+        // LMNP ou LMP sous seuil : prélèvements sociaux classiques (17.2%)
+        socialTax = taxableIncome * (socialTaxRate / 100);
+    }
 
     return {
         taxableIncome,
@@ -363,8 +376,8 @@ export function calculateCapitalGainsTax(
 function calculateIRAbatement(years: number): number {
     if (years < 6) return 0;
     if (years < 22) return (years - 5) * 6;
-    if (years === 22) return 102; // 17*6 + 4
-    return 100; // Exonération totale après 22 ans
+    if (years >= 22) return 100; // Exonération totale à partir de 22 ans (corrigé : pas de 102%)
+    return 100;
 }
 
 /**
@@ -404,11 +417,17 @@ export function getConfigurationPinel(anneePinel: number, duree: 6 | 9 | 12): Co
     // Répartition de la réduction sur les années
     const repartition: number[] = [];
     if (duree === 12) {
-        // 2% les 9 premières années, 1% les 3 dernières
-        for (let i = 0; i < 9; i++) repartition.push(2);
-        for (let i = 0; i < 3; i++) repartition.push(1);
+        if (anneePinel <= 2022) {
+            // Ancien Pinel 21% : 2% les 9 premières années, 1% les 3 dernières
+            for (let i = 0; i < 9; i++) repartition.push(2);
+            for (let i = 0; i < 3; i++) repartition.push(1);
+        } else {
+            // Nouveau Pinel 14% : répartition uniforme (~1.17%/an)
+            const tauxAnnuel = tauxReduction / duree;
+            for (let i = 0; i < duree; i++) repartition.push(tauxAnnuel);
+        }
     } else {
-        // Répartition uniforme
+        // Répartition uniforme pour toutes les autres durées
         const tauxAnnuel = tauxReduction / duree;
         for (let i = 0; i < duree; i++) repartition.push(tauxAnnuel);
     }

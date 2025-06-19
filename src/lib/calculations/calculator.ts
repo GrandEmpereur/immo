@@ -155,7 +155,9 @@ export function calculerRentabiliteImmobiliere(params: ParametresInvestissement)
 
         // Cash-flows
         const annuitesPret = (mensualitePret * 12) || 0;
-        const cashFlowAvantImpot = loyersFinaux - chargesAnnuelles - annuitesPret;
+        // Ajout de l'assurance emprunteur oubliée dans l'audit
+        const assuranceEmprunteurAnnuelle = params.montantPret * (params.assuranceEmprunteur || 0) / 100;
+        const cashFlowAvantImpot = loyersFinaux - chargesAnnuelles - annuitesPret - assuranceEmprunteurAnnuelle;
         const impotNet = Math.max(0, fiscalResult.totalTax - reductionImpot);
         const cashFlowApresImpot = cashFlowAvantImpot - impotNet;
 
@@ -331,7 +333,11 @@ export function simulateInvestment(input: SimulationInput): SimulationResult {
     const totalAcquisitionCost = input.price + input.notaryFees;
     const annualRent = input.rentMonthly * 12;
     const effectiveAnnualRent = annualRent * (1 - input.vacancyRate / 100);
-    const annualExpenses = (input.chargesNonRecoverableMonthly * 12);
+    // Calcul du total des charges non récupérables
+    const totalNonRecoverableMonthly = (input.propertyTaxMonthly || 0) +
+        (input.condoFeesMonthly || 0) + (input.managementFeesMonthly || 0) +
+        (input.insuranceMonthly || 0) + (input.otherExpensesMonthly || 0);
+    const annualExpenses = totalNonRecoverableMonthly * 12;
 
     // Plan d'amortissement du prêt
     const loanSchedule = generateAmortizationSchedule(
@@ -365,9 +371,20 @@ export function simulateInvestment(input: SimulationInput): SimulationResult {
         const loanData = loanSchedule.find(l => l.year === year) ||
             { interestPaid: 0, principalPaid: 0, remainingBalance: 0 };
 
-        // Revenus et charges de l'année
-        const yearRent = effectiveAnnualRent;
-        const yearExpenses = annualExpenses + loanData.interestPaid;
+        // Revenus avec indexation annuelle des loyers
+        const indexationRate = input.rentIndexationRate || 1.5;
+        const indexedRent = effectiveAnnualRent * Math.pow(1 + indexationRate / 100, year - 1);
+        const yearRent = indexedRent;
+
+        // Charges selon le mode (détaillé ou forfait global)
+        let yearlyCharges: number;
+        if (input.useGlobalChargesMode && input.globalMonthlyCharges) {
+            yearlyCharges = input.globalMonthlyCharges * 12;
+        } else {
+            yearlyCharges = annualExpenses;
+        }
+
+        const yearExpenses = yearlyCharges + loanData.interestPaid;
 
         // Calcul fiscal
         const taxResult = calculateTax(
@@ -438,16 +455,15 @@ export function simulateInvestment(input: SimulationInput): SimulationResult {
         calculateLoanPayment(input.loanAmount, input.interestRate, input.loanDuration) : 0;
     const monthlyCashflow = calculateMonthlyCashflow(
         input.rentMonthly,
-        input.chargesNonRecoverableMonthly,
+        totalNonRecoverableMonthly,
         monthlyPayment,
         (firstYearProjection.incomeTax + firstYearProjection.socialTax) / 12
     );
 
-    // Calcul du TRI
-    const cashFlows = calculateCashFlows(input, yearlyProjections);
-    const irr10 = cashFlows.length >= 10 ? calculateIRR(cashFlows.slice(0, 11)) : 0;
-    const irr20 = cashFlows.length >= 20 ? calculateIRR(cashFlows.slice(0, 21)) : 0;
-    const irr30 = calculateIRR(cashFlows);
+    // Calcul du TRI avec gestion robuste des durées
+    const irr10 = calculateIRRForPeriod(input, yearlyProjections, 10);
+    const irr20 = calculateIRRForPeriod(input, yearlyProjections, 20);
+    const irr30 = calculateIRRForPeriod(input, yearlyProjections, 30);
 
     // ROI global
     const totalInvestment = input.downPayment +
@@ -481,6 +497,35 @@ export function simulateInvestment(input: SimulationInput): SimulationResult {
 }
 
 /**
+ * Calcule le TRI pour une période donnée avec revente automatique
+ */
+function calculateIRRForPeriod(input: SimulationInput, projections: YearlyProjection[], years: number): number {
+    if (years <= 0 || projections.length === 0) return 0;
+
+    const flows: number[] = [];
+
+    // Flux initial : apport + frais
+    flows.push(-(input.downPayment + input.notaryFees));
+
+    // Limiter aux années disponibles
+    const limitedYears = Math.min(years, projections.length);
+
+    // Flux annuels
+    for (let i = 0; i < limitedYears; i++) {
+        flows.push(projections[i].cashflow);
+    }
+
+    // Ajouter la valeur de revente à la dernière année de la période
+    if (limitedYears > 0 && limitedYears <= projections.length) {
+        const lastProjection = projections[limitedYears - 1];
+        const resaleValue = calculateResaleValue(input, lastProjection);
+        flows[limitedYears] += resaleValue; // Ajouter au dernier flux
+    }
+
+    return calculateIRR(flows);
+}
+
+/**
  * Calcule les flux de trésorerie pour le TRI
  */
 function calculateCashFlows(input: SimulationInput, projections: YearlyProjection[]): number[] {
@@ -508,6 +553,8 @@ function calculateCashFlows(input: SimulationInput, projections: YearlyProjectio
  * Calcule la valeur nette de revente
  */
 function calculateResaleValue(input: SimulationInput, projection: YearlyProjection): number {
+    if (!projection || projection.propertyValue <= 0) return 0;
+
     const capitalGainsTax = calculateCapitalGainsTax(
         projection.propertyValue,
         input.price,
@@ -515,11 +562,16 @@ function calculateResaleValue(input: SimulationInput, projection: YearlyProjecti
         projection.year
     );
 
+    // Frais de vente estimés (agence + notaire vendeur) : ~8%
+    const saleCosts = projection.propertyValue * 0.08;
+
     const netSalePrice = projection.propertyValue -
         capitalGainsTax.totalTax -
-        projection.loanRemaining;
+        projection.loanRemaining -
+        saleCosts;
 
-    return netSalePrice;
+    // S'assurer qu'on ne retourne pas une valeur négative aberrante
+    return Math.max(0, netSalePrice);
 }
 
 /**

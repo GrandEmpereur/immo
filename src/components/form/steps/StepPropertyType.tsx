@@ -4,7 +4,7 @@ import React from 'react';
 import { useSimulationStore } from '@/store/simulation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Building, Home, MapPin } from 'lucide-react';
+import { Building, Home, MapPin, Briefcase, Store, Users } from 'lucide-react';
 
 const PROPERTY_TYPES = [
   {
@@ -13,7 +13,8 @@ const PROPERTY_TYPES = [
     description: 'Appartement ou maison neuf, éligible aux dispositifs Pinel',
     icon: Building,
     benefits: ['Frais de notaire réduits (~2,5%)', 'Garanties constructeur', 'Éligible Pinel'],
-    notaryFeesRate: 2.5
+    notaryFeesRate: 2.5,
+    category: 'résidentiel'
   },
   {
     value: 'ancien' as const,
@@ -21,7 +22,8 @@ const PROPERTY_TYPES = [
     description: 'Appartement ou maison existant, avec possibilité de travaux',
     icon: Home,
     benefits: ['Prix souvent plus attractif', 'Éligible Denormandie/Malraux', 'Négociation possible'],
-    notaryFeesRate: 7.5
+    notaryFeesRate: 7.5,
+    category: 'résidentiel'
   },
   {
     value: 'saisonnier' as const,
@@ -29,14 +31,42 @@ const PROPERTY_TYPES = [
     description: 'Bien destiné à la location courte durée (Airbnb, etc.)',
     icon: MapPin,
     benefits: ['Rendement potentiellement élevé', 'Flexibilité d\'usage', 'Régime meublé'],
-    notaryFeesRate: 7.5
+    notaryFeesRate: 7.5,
+    category: 'résidentiel'
+  },
+  {
+    value: 'bureau' as const,
+    title: 'Bureau / Professionnel',
+    description: 'Local professionnel, cabinet, espace de coworking',
+    icon: Briefcase,
+    benefits: ['Baux professionnels longs', 'Locataires solvables', 'Indexation encadrée'],
+    notaryFeesRate: 8.0,
+    category: 'professionnel'
+  },
+  {
+    value: 'commercial' as const,
+    title: 'Local Commercial',
+    description: 'Boutique, restaurant, commerce de proximité',
+    icon: Store,
+    benefits: ['Rendements élevés possibles', 'Valorisation par emplacement', 'Baux 3/6/9 ans'],
+    notaryFeesRate: 8.0,
+    category: 'commercial'
+  },
+  {
+    value: 'mixte' as const,
+    title: 'Usage Mixte',
+    description: 'Bien combinant logement et activité professionnelle',
+    icon: Users,
+    benefits: ['Diversification des revenus', 'Optimisation fiscale', 'Flexibilité d\'usage'],
+    notaryFeesRate: 7.5,
+    category: 'mixte'
   }
 ];
 
 export function StepPropertyType() {
   const { data, updateData } = useSimulationStore();
 
-  const handleSelectType = (propertyType: 'neuf' | 'ancien' | 'saisonnier', notaryFeesRate: number) => {
+  const handleSelectType = (propertyType: 'neuf' | 'ancien' | 'saisonnier' | 'bureau' | 'commercial' | 'mixte', notaryFeesRate: number) => {
     updateData({ 
       propertyType,
       // Auto-calcul des frais de notaire si un prix est déjà saisi
@@ -52,7 +82,7 @@ export function StepPropertyType() {
         </p>
       </div>
 
-      <div className="grid md:grid-cols-3 gap-6">
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
         {PROPERTY_TYPES.map((type) => {
           const Icon = type.icon;
           const isSelected = data.propertyType === type.value;
@@ -135,6 +165,24 @@ export function StepPropertyType() {
                 <p className="text-sm text-blue-700">
                   La location saisonnière peut offrir des rendements élevés mais nécessite plus de gestion. 
                   Attention aux nouvelles règles 2025 : plafond micro-BIC à 15k€ si non classé.
+                </p>
+              )}
+              {data.propertyType === 'bureau' && (
+                <p className="text-sm text-blue-700">
+                  Les bureaux offrent des baux longs (3/6/9 ans) avec des locataires généralement solvables. 
+                  Fiscalité en régime BIC, possibilité d'amortissement du mobilier et équipements.
+                </p>
+              )}
+              {data.propertyType === 'commercial' && (
+                <p className="text-sm text-blue-700">
+                  Le commercial peut offrir des rendements attractifs mais dépend fortement de l'emplacement. 
+                  Attention aux charges de copropriété et à la vacance commerciale.
+                </p>
+              )}
+              {data.propertyType === 'mixte' && (
+                <p className="text-sm text-blue-700">
+                  L'usage mixte permet de diversifier les revenus (habitation + profession libérale). 
+                  Optimisation fiscale possible avec répartition des charges.
                 </p>
               )}
             </div>

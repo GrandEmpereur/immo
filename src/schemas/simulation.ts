@@ -1,9 +1,10 @@
 import { z } from 'zod';
 
 export const simulationSchema = z.object({
-    propertyType: z.enum(["neuf", "ancien", "saisonnier"], {
+    propertyType: z.enum(["neuf", "ancien", "saisonnier", "bureau", "commercial", "mixte"], {
         required_error: "Veuillez sélectionner un type de bien"
     }),
+    usageType: z.enum(["locatif", "professionnel", "mixte_pro_locatif"]).optional(),
     price: z.number().min(1, "Le prix d'achat doit être > 0"),
     notaryFees: z.number().min(0, "Les frais de notaire doivent être ≥ 0"),
     surface: z.number().min(1, "La surface doit être > 0"),
@@ -20,7 +21,7 @@ export const simulationSchema = z.object({
     managementFeesMonthly: z.number().min(0, "Les frais de gestion doivent être ≥ 0"),
     insuranceMonthly: z.number().min(0, "L'assurance doit être ≥ 0"),
     otherExpensesMonthly: z.number().min(0, "Les autres charges doivent être ≥ 0"),
-    vacancyRate: z.number().min(0).max(100, "Vacance en % (0-100)"),
+    vacancyRate: z.number().min(0).max(20, "Vacance locative limitée à 20% (valeur réaliste)"),
     regime: z.enum([
         "micro-foncier",
         "réel-foncier",
@@ -43,13 +44,26 @@ export const simulationSchema = z.object({
     taxpayerTMI: z.number().min(0).max(60, "TMI invalide"), // TMI en %, max 60%
     dpeClass: z.enum(["A", "B", "C", "D", "E", "F", "G"]).optional(),
     resaleYear: z.number().int().min(0).max(30),
-    appreciationRate: z.number().min(-10).max(15) // Appréciation entre -10% et +15%/an
+    appreciationRate: z.number().min(-10).max(15), // Appréciation entre -10% et +15%/an
+    rentIndexationRate: z.number().min(0).max(5).optional().default(1.5), // Indexation annuelle des loyers
+    useGlobalChargesMode: z.boolean().optional().default(false), // Mode forfait charges global
+    globalMonthlyCharges: z.number().min(0).optional(), // Forfait charges global si activé
+    includeResaleAnalysis: z.boolean().optional().default(true), // Analyse à la revente
+    anticipatedResaleYear: z.number().int().min(1).max(30).optional(), // Année de revente anticipée
 })
     // Règles de validation conditionnelles
     .refine(data => {
-        // Cohérence financement
-        return data.downPayment <= data.price + data.notaryFees;
-    }, { message: "L'apport ne peut excéder le coût total", path: ["downPayment"] })
+        // Cohérence financement : apport ≤ coût total
+        const totalCost = data.price + data.notaryFees;
+        return data.downPayment <= totalCost;
+    }, { message: "L'apport ne peut excéder le coût total (prix + frais notaire)", path: ["downPayment"] })
+    .refine(data => {
+        // Alerte financement minimal bancaire
+        if (data.loanAmount > 0 && data.loanAmount < 10000) {
+            return false; // Force une validation qui échouera
+        }
+        return true;
+    }, { message: "Montant minimal bancaire : 10 000€. En dessous, peu de banques financent.", path: ["loanAmount"] })
     .refine(data => {
         // Taux obligatoire si prêt
         if (data.loanDuration > 0 && data.loanAmount > 0) {
@@ -70,13 +84,13 @@ export const simulationSchema = z.object({
         if (data.regime === "micro-BIC") {
             const annualRent = data.rentMonthly * 12;
             if (data.subOptions?.meubleTourismeClasse) {
-                // Meublé classé
-                return annualRent <= 77700;
+                // Meublé de tourisme classé : plafond 188 700€
+                return annualRent <= 188700;
             } else if (data.propertyType === "saisonnier") {
-                // Meublé non classé (réforme 2025)
+                // Meublé saisonnier non classé (réforme 2025) : plafond 15 000€
                 return annualRent <= 15000;
             } else {
-                // Meublé normal
+                // Meublé normal (LMNP classique) : plafond 77 700€
                 return annualRent <= 77700;
             }
         }
@@ -102,7 +116,35 @@ export const simulationSchema = z.object({
             return data.propertyType === "ancien";
         }
         return true;
-    }, { message: "Le dispositif Malraux ne s'applique qu'aux biens anciens en secteur éligible", path: ["regime"] });
+    }, { message: "Le dispositif Malraux ne s'applique qu'aux biens anciens en secteur éligible", path: ["regime"] })
+    .refine(data => {
+        // Validation conditionnelle Pinel - durée obligatoire
+        if (data.regime === "Pinel") {
+            return data.subOptions?.pinelDuration && [6, 9, 12].includes(data.subOptions.pinelDuration);
+        }
+        return true;
+    }, { message: "Durée d'engagement Pinel obligatoire (6, 9 ou 12 ans)", path: ["subOptions", "pinelDuration"] })
+    .refine(data => {
+        // Validation conditionnelle Denormandie - montant travaux
+        if (data.regime === "Denormandie") {
+            return data.subOptions?.worksAmount && data.subOptions.worksAmount >= 10000;
+        }
+        return true;
+    }, { message: "Denormandie : montant minimal de travaux requis (≥ 10 000€)", path: ["subOptions", "worksAmount"] })
+    .refine(data => {
+        // Validation usage mixte commercial
+        if (data.propertyType === "bureau" || data.propertyType === "commercial") {
+            return data.usageType && data.usageType !== "locatif";
+        }
+        return true;
+    }, { message: "Biens commerciaux : usage professionnel ou mixte requis", path: ["usageType"] })
+    .refine(data => {
+        // Validation mode forfait charges
+        if (data.useGlobalChargesMode) {
+            return data.globalMonthlyCharges && data.globalMonthlyCharges > 0;
+        }
+        return true;
+    }, { message: "Mode forfait activé : montant des charges globales requis", path: ["globalMonthlyCharges"] });
 
 export type SimulationInput = z.infer<typeof simulationSchema>;
 

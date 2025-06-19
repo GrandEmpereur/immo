@@ -58,7 +58,12 @@ export function StepSummary() {
       })()
     : 0;
 
-  const monthlyCashflow = (data.rentMonthly || 0) - monthlyPayment - ((data.chargesNonRecoverableMonthly || 0));
+  // Calcul du total des charges non récupérables
+  const totalNonRecoverableCharges = (data.propertyTaxMonthly || 0) + 
+    (data.condoFeesMonthly || 0) + (data.managementFeesMonthly || 0) + 
+    (data.insuranceMonthly || 0) + (data.otherExpensesMonthly || 0);
+  
+  const monthlyCashflow = (data.rentMonthly || 0) - monthlyPayment - totalNonRecoverableCharges;
 
   // Validation des données
   const getValidationIssues = () => {
@@ -243,7 +248,7 @@ export function StepSummary() {
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-gray-600">Charges non récupérables :</span>
-                <span className="font-semibold text-red-600">{(data.chargesNonRecoverableMonthly || 0).toLocaleString('fr-FR')} €/mois</span>
+                <span className="font-semibold text-red-600">{(totalNonRecoverableCharges || 0).toLocaleString('fr-FR')} €/mois</span>
               </div>
             </div>
             <div className="space-y-3">

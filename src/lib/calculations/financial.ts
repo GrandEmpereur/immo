@@ -86,34 +86,81 @@ export function calculateYields(
 }
 
 /**
- * Calcule le TRI (Taux de Rendement Interne) par méthode de Newton
+ * Calcule le TRI (Taux de Rendement Interne) par méthode de Newton robuste
  */
 export function calculateIRR(cashFlows: number[], guess: number = 0.1): number {
-    const maxIterations = 100;
-    const tolerance = 1e-6;
+    // Validation des flux de trésorerie
+    if (!cashFlows || cashFlows.length < 2) return 0;
 
-    let rate = guess;
+    // Vérifier qu'il y a au moins un flux négatif et un positif
+    const hasNegative = cashFlows.some(cf => cf < 0);
+    const hasPositive = cashFlows.some(cf => cf > 0);
+    if (!hasNegative || !hasPositive) return 0;
 
-    for (let i = 0; i < maxIterations; i++) {
-        let npv = 0;
-        let dnpv = 0;
+    const maxIterations = 1000;
+    const tolerance = 1e-7;
 
-        for (let t = 0; t < cashFlows.length; t++) {
-            const factor = Math.pow(1 + rate, t);
-            npv += cashFlows[t] / factor;
-            dnpv -= (t * cashFlows[t]) / (factor * (1 + rate));
+    // Essayer plusieurs valeurs initiales pour éviter la divergence
+    const initialGuesses = [guess, 0.05, 0.15, 0.25, -0.05];
+
+    for (const initialGuess of initialGuesses) {
+        let rate = initialGuess;
+        let lastRate = rate;
+
+        for (let i = 0; i < maxIterations; i++) {
+            let npv = 0;
+            let dnpv = 0;
+
+            // Calcul de la VAN et de sa dérivée
+            for (let t = 0; t < cashFlows.length; t++) {
+                if (rate <= -1) break; // Éviter les taux impossibles
+
+                const factor = Math.pow(1 + rate, t);
+                if (factor === 0 || !isFinite(factor)) break;
+
+                npv += cashFlows[t] / factor;
+                if (t > 0) {
+                    dnpv -= (t * cashFlows[t]) / (factor * (1 + rate));
+                }
+            }
+
+            // Vérification de convergence
+            if (Math.abs(npv) < tolerance) {
+                const result = rate * 100;
+                // Validation du résultat (TRI entre -99% et 1000%)
+                if (result >= -99 && result <= 1000) {
+                    return result;
+                }
+                break;
+            }
+
+            // Éviter la division par zéro et les dérivées trop petites
+            if (Math.abs(dnpv) < 1e-10) break;
+
+            const newRate = rate - npv / dnpv;
+
+            // Éviter les oscillations et limiter les changements drastiques
+            if (Math.abs(newRate - lastRate) < tolerance) {
+                const result = newRate * 100;
+                if (result >= -99 && result <= 1000) {
+                    return result;
+                }
+                break;
+            }
+
+            // Limiter le taux pour éviter la divergence
+            lastRate = rate;
+            rate = Math.max(-0.99, Math.min(10, newRate));
+
+            // Détection d'oscillation
+            if (i > 10 && Math.abs(rate - lastRate) > Math.abs(newRate - rate)) {
+                rate = (rate + lastRate) / 2; // Moyenne pour stabiliser
+            }
         }
-
-        if (Math.abs(npv) < tolerance) {
-            return rate * 100; // Retour en pourcentage
-        }
-
-        if (dnpv === 0) break;
-
-        rate = rate - npv / dnpv;
     }
 
-    return rate * 100;
+    // Si aucune solution trouvée, retourner 0 (pas de TRI calculable)
+    return 0;
 }
 
 /**
@@ -297,5 +344,43 @@ export function calculerAbattementPlusValue(anneesDetention: number): { abatteme
     return {
         abattementIR: Math.min(abattementIR, 100),
         abattementPS: Math.min(abattementPS, 100)
+    };
+}
+
+/**
+ * Fonction de diagnostic pour les calculs de TRI
+ */
+export function debugIRR(cashFlows: number[]): {
+    flows: number[];
+    hasNegative: boolean;
+    hasPositive: boolean;
+    isValid: boolean;
+    npvAt0: number;
+    npvAt10: number;
+    suggestion: string;
+} {
+    const hasNegative = cashFlows.some(cf => cf < 0);
+    const hasPositive = cashFlows.some(cf => cf > 0);
+    const isValid = hasNegative && hasPositive && cashFlows.length >= 2;
+
+    // Calcul NPV à différents taux pour diagnostic
+    const npvAt0 = cashFlows.reduce((sum, cf, t) => sum + cf / Math.pow(1, t), 0);
+    const npvAt10 = cashFlows.reduce((sum, cf, t) => sum + cf / Math.pow(1.1, t), 0);
+
+    let suggestion = "";
+    if (!hasNegative) suggestion = "Aucun flux négatif - impossible de calculer un TRI";
+    else if (!hasPositive) suggestion = "Aucun flux positif - investissement non rentable";
+    else if (cashFlows.length < 2) suggestion = "Pas assez de flux pour calculer un TRI";
+    else if (Math.abs(npvAt0) < 1) suggestion = "Flux très faibles - TRI peu significatif";
+    else suggestion = "Flux valides pour calcul TRI";
+
+    return {
+        flows: [...cashFlows],
+        hasNegative,
+        hasPositive,
+        isValid,
+        npvAt0,
+        npvAt10,
+        suggestion
     };
 } 
